@@ -116,9 +116,12 @@ services:
       - DB_PASSWORD=password
       - DB_NAME=multi_tenant_db
       - KAFKA_BROKER=kafka:29092
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     depends_on:
       - postgres
       - kafka
+      - redis
     networks:
       - multi-tenant-network
 

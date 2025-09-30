@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -95,7 +96,16 @@ func handleStartSession(db *gorm.DB, kafkaProducer *KafkaProducer) gin.HandlerFu
 			return
 		}
 
-		// Send session event to Kafka
+		// Cache the session in Redis with TTL = session duration
+		cacheKey := fmt.Sprintf("session:active:%s", session.ID.String())
+		if sessionData, err := json.Marshal(session); err == nil {
+			cacheDuration := time.Duration(session.Duration) * time.Second
+			if err := utils.CacheSet(cacheKey, string(sessionData), cacheDuration); err != nil {
+				fmt.Printf("Warning: Failed to cache session in Redis: %v\n", err)
+			}
+		}
+
+		// Send session event to Kafka (async with worker pool)
 		sessionEvent := SessionEvent{
 			ID:            session.ID,
 			TenantID:      tenantUUID,
@@ -107,8 +117,8 @@ func handleStartSession(db *gorm.DB, kafkaProducer *KafkaProducer) gin.HandlerFu
 		}
 
 		if err := kafkaProducer.SendSessionEvent(sessionEvent); err != nil {
-			// Log error but don't fail the request
-			fmt.Printf("Failed to send session event to Kafka: %v\n", err)
+			// Log error but don't fail the request (event is queued asynchronously)
+			fmt.Printf("Warning: Failed to queue session event: %v\n", err)
 		}
 
 		utils.CreatedResponse(c, "Session started successfully", session)
@@ -158,7 +168,15 @@ func handleStopSession(db *gorm.DB, kafkaProducer *KafkaProducer) gin.HandlerFun
 			return
 		}
 
-		// Send session event to Kafka
+		// Invalidate session cache in Redis
+		cacheKey := fmt.Sprintf("session:active:%s", sessionUUID.String())
+		if redisClient := utils.GetRedisClient(); redisClient != nil {
+			if err := redisClient.Del(utils.GetRedisContext(), cacheKey).Err(); err != nil {
+				fmt.Printf("Warning: Failed to invalidate session cache: %v\n", err)
+			}
+		}
+
+		// Send session event to Kafka (async with worker pool)
 		sessionEvent := SessionEvent{
 			ID:            session.ID,
 			TenantID:      tenantUUID,
@@ -171,8 +189,8 @@ func handleStopSession(db *gorm.DB, kafkaProducer *KafkaProducer) gin.HandlerFun
 		}
 
 		if err := kafkaProducer.SendSessionEvent(sessionEvent); err != nil {
-			// Log error but don't fail the request
-			fmt.Printf("Failed to send session event to Kafka: %v\n", err)
+			// Log error but don't fail the request (event is queued asynchronously)
+			fmt.Printf("Warning: Failed to queue session event: %v\n", err)
 		}
 
 		utils.OKResponse(c, "Session stopped successfully", session)
@@ -252,22 +270,51 @@ func handleLocationUpdate(db *gorm.DB, kafkaProducer *KafkaProducer) gin.Handler
 			return
 		}
 
-		// Verify session exists and is active
+		// Try to get session from Redis cache first (OPTIMIZATION)
 		var session models.LocationSession
-		if err := db.Where("id = ? AND cognito_user_id = ? AND tenant_id = ? AND status = ?", req.SessionID, userID, tenantUUID, models.SessionStatusActive).First(&session).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				utils.NotFoundResponse(c, "Active session not found")
-			} else {
-				utils.InternalServerErrorResponse(c, "Failed to fetch session")
+		cacheKey := fmt.Sprintf("session:active:%s", req.SessionID.String())
+		sessionFound := false
+
+		if cachedData, err := utils.CacheGet(cacheKey); err == nil {
+			// Cache HIT - parse session from Redis
+			if err := json.Unmarshal([]byte(cachedData), &session); err == nil {
+				// Verify user and tenant match (security check)
+				if session.CognitoUserID == userID && session.TenantID == tenantUUID {
+					sessionFound = true
+				}
 			}
-			return
 		}
 
-		// Check if session has expired
+		// Cache MISS - fallback to database
+		if !sessionFound {
+			if err := db.Where("id = ? AND cognito_user_id = ? AND tenant_id = ? AND status = ?", req.SessionID, userID, tenantUUID, models.SessionStatusActive).First(&session).Error; err != nil {
+				if err == gorm.ErrRecordNotFound {
+					utils.NotFoundResponse(c, "Active session not found")
+				} else {
+					utils.InternalServerErrorResponse(c, "Failed to fetch session")
+				}
+				return
+			}
+
+			// Cache the session for future requests (with remaining TTL)
+			elapsed := time.Since(session.StartedAt).Seconds()
+			remainingTTL := time.Duration(session.Duration)*time.Second - time.Duration(elapsed)*time.Second
+			if remainingTTL > 0 {
+				if sessionData, err := json.Marshal(session); err == nil {
+					_ = utils.CacheSet(cacheKey, string(sessionData), remainingTTL)
+				}
+			}
+		}
+
+		// Check if session has expired (for both cache hit and miss)
 		if time.Since(session.StartedAt).Seconds() > float64(session.Duration) {
 			// Auto-end expired session
 			session.EndSession()
 			db.Save(&session)
+			// Invalidate cache
+			if redisClient := utils.GetRedisClient(); redisClient != nil {
+				redisClient.Del(utils.GetRedisContext(), cacheKey)
+			}
 			utils.BadRequestResponse(c, "Session has expired")
 			return
 		}
@@ -294,7 +341,7 @@ func handleLocationUpdate(db *gorm.DB, kafkaProducer *KafkaProducer) gin.Handler
 			return
 		}
 
-		// Send location event to Kafka
+		// Send location event to Kafka (async with worker pool)
 		locationEvent := LocationEvent{
 			ID:            location.ID,
 			TenantID:      tenantUUID,
@@ -307,8 +354,8 @@ func handleLocationUpdate(db *gorm.DB, kafkaProducer *KafkaProducer) gin.Handler
 		}
 
 		if err := kafkaProducer.SendLocationEvent(locationEvent); err != nil {
-			// Log error but don't fail the request
-			fmt.Printf("Failed to send location event to Kafka: %v\n", err)
+			// Log warning if queue is full (event is queued asynchronously)
+			fmt.Printf("Warning: Failed to queue location event: %v\n", err)
 		}
 
 		utils.OKResponse(c, "Location updated successfully", location)

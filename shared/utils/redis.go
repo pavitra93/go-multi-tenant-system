@@ -80,6 +80,16 @@ func CacheExists(key string) (bool, error) {
 	return count > 0, err
 }
 
+// GetRedisClient returns the Redis client instance (for advanced operations)
+func GetRedisClient() *redis.Client {
+	return RedisClient
+}
+
+// GetRedisContext returns the Redis context
+func GetRedisContext() context.Context {
+	return ctx
+}
+
 // CloseRedis closes the Redis connection
 func CloseRedis() error {
 	if RedisClient != nil {

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -16,9 +15,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/pavitra93/go-multi-tenant-system/shared/config"
 	"github.com/pavitra93/go-multi-tenant-system/shared/models"
 	"github.com/pavitra93/go-multi-tenant-system/shared/utils"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -51,8 +50,8 @@ func NewAuthMiddleware(region, userPoolID string) (*AuthMiddleware, error) {
 		return nil, err
 	}
 
-	// Initialize database connection
-	db, err := initDatabase()
+	// Initialize database connection using shared config
+	db, err := config.ConnectDatabase()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
@@ -425,31 +424,4 @@ func GetTenantIDFromContext(c *gin.Context) (uuid.UUID, error) {
 	}
 
 	return uuid.Parse(tenantIDStr.(string))
-}
-
-// initDatabase initializes the database connection
-// Note: Database is still used for data operations, just not for every auth check
-func initDatabase() (*gorm.DB, error) {
-	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
-		getEnv("DB_HOST", "postgres"),
-		getEnv("DB_USER", "postgres"),
-		getEnv("DB_PASSWORD", "password"),
-		getEnv("DB_NAME", "multi_tenant_db"),
-		getEnv("DB_PORT", "5432"),
-	)
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		return nil, err
-	}
-
-	return db, nil
-}
-
-// getEnv gets an environment variable with a default value
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }
