@@ -18,6 +18,12 @@ func main() {
 		logrus.Warn("No .env file found, using environment variables")
 	}
 
+	// Initialize Redis for session management
+	if err := utils.InitRedis(); err != nil {
+		log.Fatal("Failed to connect to Redis:", err)
+	}
+	defer utils.CloseRedis()
+
 	// Initialize database
 	db, err := config.ConnectDatabase()
 	if err != nil {
@@ -47,8 +53,10 @@ func main() {
 		auth.POST("/login", handleLogin(db))
 		auth.POST("/register", handleRegister(db))
 		auth.POST("/refresh", handleRefreshToken(db))
-		auth.GET("/verify", authMiddleware.RequireAuth(), handleVerifyToken())
-		auth.POST("/logout", authMiddleware.RequireAuth(), handleLogout())
+		// Note: /auth/confirm endpoint removed - email confirmation handled manually in AWS console
+		auth.POST("/logout", handleLogout(db))
+		auth.GET("/sessions", handleGetSessions(db))
+		auth.DELETE("/sessions/:session_id", handleRevokeSession(db))
 	}
 
 	// User management routes (admin only)

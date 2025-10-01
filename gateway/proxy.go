@@ -167,15 +167,17 @@ func (scs *ServiceClients) GetServiceStatus() map[string]interface{} {
 		}
 	}
 
-	// Check streaming service
+	// Check streaming service (optional - background worker)
 	if err := scs.StreamingService.HealthCheck(); err != nil {
 		status["streaming_service"] = map[string]interface{}{
 			"healthy": false,
 			"error":   err.Error(),
+			"note":    "Background Kafka consumer",
 		}
 	} else {
 		status["streaming_service"] = map[string]interface{}{
 			"healthy": true,
+			"note":    "Background Kafka consumer",
 		}
 	}
 

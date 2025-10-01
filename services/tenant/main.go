@@ -18,6 +18,12 @@ func main() {
 		logrus.Warn("No .env file found, using environment variables")
 	}
 
+	// Initialize Redis for session management
+	if err := utils.InitRedis(); err != nil {
+		log.Fatal("Failed to connect to Redis:", err)
+	}
+	defer utils.CloseRedis()
+
 	// Initialize database
 	db, err := config.ConnectDatabase()
 	if err != nil {

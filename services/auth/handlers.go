@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cognitoidentityprovider"
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
@@ -65,8 +66,8 @@ type LoginRequest struct {
 type RegisterRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required,min=8"`
-	TenantID string `json:"tenant_id" binding:"required"`
-	Role     string `json:"role,omitempty"` // Optional: admin, tenant_owner, or user (defaults to user)
+	TenantID string `json:"tenant_id,omitempty"` // Optional for admin users
+	Role     string `json:"role,omitempty"`      // Optional: admin, tenant_owner, or user (defaults to user)
 }
 
 // LoginResponse represents the login response
@@ -126,31 +127,56 @@ func handleLogin(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Parse ID token to extract user info
+		// Get access token and ID token
+		accessToken := *authResult.AuthenticationResult.AccessToken
 		idToken := *authResult.AuthenticationResult.IdToken
-		userInfo, err := extractUserInfoFromToken(idToken)
+
+		// Extract Cognito ID from ID token
+		cognitoID, err := extractCognitoIDFromToken(idToken)
 		if err != nil {
-			// Fallback: try access token
-			accessToken := *authResult.AuthenticationResult.AccessToken
-			userInfo, _ = extractUserInfoFromToken(accessToken)
-		} else {
-			// Update last_login_at asynchronously (non-blocking)
-			go func() {
-				now := time.Now()
-				db.Model(&models.User{}).Where("cognito_id = ?", userInfo.CognitoID).Update("last_login_at", now)
-			}()
+			utils.InternalServerErrorResponse(c, "Failed to extract user ID from token")
+			return
 		}
 
-		// Prepare response with user info from JWT (no DB query needed!)
+		// Build user profile from database lookup using Cognito ID
+		fmt.Printf("Looking up user with Cognito ID: %s\n", cognitoID)
+		userProfile, err := buildUserProfileFromDB(db, cognitoID)
+		if err != nil {
+			fmt.Printf("Failed to build user profile: %v\n", err)
+			utils.InternalServerErrorResponse(c, "Failed to build user profile")
+			return
+		}
+		fmt.Printf("User profile built successfully: %+v\n", userProfile)
+
+		// Create Redis session
+		sessionTTL := time.Duration(*authResult.AuthenticationResult.ExpiresIn) * time.Second
+		session, err := utils.CreateTokenSession(accessToken, userProfile, sessionTTL)
+		if err != nil {
+			fmt.Printf("Failed to create Redis session: %v\n", err)
+			utils.InternalServerErrorResponse(c, "Failed to create session")
+			return
+		}
+
+		// Update last_login_at asynchronously (non-blocking)
+		go func() {
+			now := time.Now()
+			if userProfile.IsAdmin {
+				// Update admin last login
+				db.Model(&models.Admin{}).Where("cognito_id = ?", userProfile.CognitoID).Update("last_login_at", now)
+			} else {
+				// Update user last login
+				db.Model(&models.User{}).Where("cognito_id = ?", userProfile.CognitoID).Update("last_login_at", now)
+			}
+		}()
+
+		// Prepare response with access token only
 		response := map[string]interface{}{
-			"access_token":  *authResult.AuthenticationResult.AccessToken,
-			"id_token":      idToken,
-			"refresh_token": *authResult.AuthenticationResult.RefreshToken,
-			"expires_in":    *authResult.AuthenticationResult.ExpiresIn,
-			"token_type":    "Bearer",
-			"user_info":     userInfo,
-			// Clear instruction for developers
-			"_note": "Use id_token (not access_token) for API calls - it contains custom attributes",
+			"access_token": accessToken,
+			"expires_in":   *authResult.AuthenticationResult.ExpiresIn,
+			"token_type":   "Bearer",
+			"user_info":    userProfile,
+			"session_id":   session.SessionID,
+			"_note":        "Use access_token for API calls - user info is cached in Redis",
 		}
 
 		utils.OKResponse(c, "Login successful", response)
@@ -166,15 +192,37 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Validate tenant exists
-		tenantID, err := uuid.Parse(req.TenantID)
+		// Determine user role (default to "user" if not specified)
+		userRole := models.RoleUser
+		if req.Role != "" {
+			// Validate role
+			switch req.Role {
+			case "tenant_owner", "user":
+				userRole = models.UserRole(req.Role)
+			case "admin":
+				// Admin users are handled separately
+				utils.BadRequestResponse(c, "Admin users must be created through a separate process")
+				return
+			default:
+				utils.BadRequestResponse(c, "Invalid role. Must be 'tenant_owner' or 'user'")
+				return
+			}
+		}
+
+		// All users must provide a tenant ID
+		if req.TenantID == "" {
+			utils.BadRequestResponse(c, "Tenant ID is required")
+			return
+		}
+
+		parsedTenantID, err := uuid.Parse(req.TenantID)
 		if err != nil {
 			utils.BadRequestResponse(c, "Invalid tenant ID")
 			return
 		}
 
 		var tenant models.Tenant
-		if err := db.Where("id = ?", tenantID).First(&tenant).Error; err != nil {
+		if err := db.Where("id = ?", parsedTenantID).First(&tenant).Error; err != nil {
 			utils.NotFoundResponse(c, "Tenant not found")
 			return
 		}
@@ -190,46 +238,38 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 		// Step 2: Create minimal user in database (will update with Cognito ID later)
 		// Note: CognitoID is required, so we'll set it after Cognito signup succeeds
 		user := models.User{
-			CognitoID: "", // Will be set after Cognito signup
-			TenantID:  tenantID,
+			CognitoID: "",             // Will be set after Cognito signup
+			TenantID:  parsedTenantID, // Tenant ID for tenant users
+			Role:      userRole,       // Role within tenant
 			CreatedAt: time.Now(),
 		}
 
 		// Don't create user in DB yet - wait for Cognito success first
 		// This ensures we don't have orphaned DB records
 
-		// Determine user role (default to "user" if not specified)
-		userRole := models.RoleUser
-		if req.Role != "" {
-			// Validate role
-			switch req.Role {
-			case "admin", "tenant_owner", "user":
-				userRole = models.UserRole(req.Role)
-			default:
-				utils.BadRequestResponse(c, "Invalid role. Must be 'admin', 'tenant_owner', or 'user'")
-				return
-			}
+		// Step 3: Register user with Cognito with custom attributes
+		userAttributes := []*cognitoidentityprovider.AttributeType{
+			{
+				Name:  aws.String("custom:role"),
+				Value: aws.String(string(userRole)),
+			},
+			{
+				Name:  aws.String("email"),
+				Value: aws.String(req.Username), // Using username as email
+			},
 		}
 
-		// Step 3: Register user with Cognito with custom attributes
+		// Add tenant_id for tenant users
+		userAttributes = append(userAttributes, &cognitoidentityprovider.AttributeType{
+			Name:  aws.String("custom:tenant_id"),
+			Value: aws.String(parsedTenantID.String()),
+		})
+
 		signUpInput := &cognitoidentityprovider.SignUpInput{
-			ClientId: aws.String(os.Getenv("COGNITO_CLIENT_ID")),
-			Username: aws.String(req.Username),
-			Password: aws.String(req.Password),
-			UserAttributes: []*cognitoidentityprovider.AttributeType{
-				{
-					Name:  aws.String("custom:tenant_id"),
-					Value: aws.String(user.TenantID.String()),
-				},
-				{
-					Name:  aws.String("custom:role"),
-					Value: aws.String(string(userRole)),
-				},
-				{
-					Name:  aws.String("email"),
-					Value: aws.String(req.Username), // Using username as email
-				},
-			},
+			ClientId:       aws.String(os.Getenv("COGNITO_CLIENT_ID")),
+			Username:       aws.String(req.Username),
+			Password:       aws.String(req.Password),
+			UserAttributes: userAttributes,
 		}
 
 		// Add secret hash if client secret is configured
@@ -239,20 +279,20 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 
 		// Use circuit breaker for Cognito call
 		var signUpResult *cognitoidentityprovider.SignUpOutput
-		err = circuitBreaker.Call(func() error {
-			var cognitoErr error
-			signUpResult, cognitoErr = cognitoClient.SignUp(signUpInput)
-			return cognitoErr
+		cognitoErr := circuitBreaker.Call(func() error {
+			var err error
+			signUpResult, err = cognitoClient.SignUp(signUpInput)
+			return err
 		})
 
-		if err != nil {
+		if cognitoErr != nil {
 			// Rollback database changes if Cognito fails
 			tx.Rollback()
 
-			if err == utils.ErrCircuitOpen {
+			if cognitoErr == utils.ErrCircuitOpen {
 				utils.ServiceUnavailableResponse(c, "Authentication service temporarily unavailable")
 			} else {
-				utils.BadRequestResponse(c, "Failed to register user: "+err.Error())
+				utils.BadRequestResponse(c, "Failed to register user: "+cognitoErr.Error())
 			}
 			return
 		}
@@ -282,7 +322,10 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Step 5: Commit transaction
+		// Step 5: User registration complete
+		// Note: User needs to be confirmed via /auth/confirm endpoint before they can login
+
+		// Step 6: Commit transaction
 		if err := tx.Commit().Error; err != nil {
 			// Last resort compensation
 			_ = circuitBreaker.Call(func() error {
@@ -300,11 +343,13 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 		// Return success with user info (no sensitive data exposed)
 		userResponse := map[string]interface{}{
 			"cognito_id": user.CognitoID,
-			"tenant_id":  user.TenantID,
 			"username":   req.Username,
-			"role":       "user",
-			"message":    "Please check your email to verify your account",
+			"role":       string(userRole),
+			"message":    "User registered successfully. Please confirm email before login.",
 		}
+
+		// Include tenant_id for tenant users
+		userResponse["tenant_id"] = user.TenantID
 		utils.CreatedResponse(c, "User registered successfully", userResponse)
 	}
 }
@@ -355,28 +400,36 @@ func handleRefreshToken(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// handleVerifyToken handles token verification
-func handleVerifyToken() gin.HandlerFunc {
+// handleConfirmEmail handles manual email confirmation (admin only)
+func handleConfirmEmail(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID, email, tenantID, role := middleware.GetUserFromContext(c)
-
-		response := map[string]interface{}{
-			"user_id":   userID,
-			"email":     email,
-			"tenant_id": tenantID,
-			"role":      role,
+		var req struct {
+			Username string `json:"username" binding:"required"`
 		}
 
-		utils.OKResponse(c, "Token is valid", response)
-	}
-}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			utils.BadRequestResponse(c, "Invalid request format")
+			return
+		}
 
-// handleLogout handles user logout
-func handleLogout() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// In a real implementation, you might want to blacklist the token
-		// For now, we'll just return a success response
-		utils.OKResponse(c, "Logged out successfully", nil)
+		// Confirm user email in Cognito
+		err := circuitBreaker.Call(func() error {
+			_, confirmErr := cognitoClient.AdminConfirmSignUp(&cognitoidentityprovider.AdminConfirmSignUpInput{
+				UserPoolId: aws.String(os.Getenv("COGNITO_USER_POOL_ID")),
+				Username:   aws.String(req.Username),
+			})
+			return confirmErr
+		})
+
+		if err != nil {
+			utils.BadRequestResponse(c, "Failed to confirm email: "+err.Error())
+			return
+		}
+
+		utils.OKResponse(c, "Email confirmed successfully", map[string]interface{}{
+			"username": req.Username,
+			"message":  "User can now login",
+		})
 	}
 }
 
@@ -580,10 +633,179 @@ func extractUserInfoFromToken(tokenString string) (*models.UserInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid tenant_id in token: %w", err)
 		}
-		userInfo.TenantID = tenantID
+		userInfo.TenantID = &tenantID
 	}
 
 	return userInfo, nil
+}
+
+// extractCognitoIDFromToken extracts the Cognito ID from a JWT token
+func extractCognitoIDFromToken(tokenString string) (string, error) {
+	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
+	if err != nil {
+		return "", fmt.Errorf("failed to parse token: %w", err)
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return "", fmt.Errorf("invalid token claims format")
+	}
+
+	sub, ok := claims["sub"].(string)
+	if !ok {
+		return "", fmt.Errorf("sub claim not found or not a string")
+	}
+
+	return sub, nil
+}
+
+// buildUserProfileFromDB builds a UserProfile from database lookup
+func buildUserProfileFromDB(db *gorm.DB, cognitoID string) (models.UserProfile, error) {
+	// First check if user is an admin
+	var admin models.Admin
+	if err := db.Where("cognito_id = ?", cognitoID).First(&admin).Error; err == nil {
+		// User is an admin
+		return models.UserProfile{
+			CognitoID:   admin.CognitoID,
+			Email:       cognitoID, // For now, use cognito ID as email placeholder
+			Username:    cognitoID, // For now, use cognito ID as username placeholder
+			Role:        "admin",
+			TenantID:    nil,
+			IsAdmin:     true,
+			Permissions: []string{"*"}, // Admin has all permissions
+			Metadata:    make(map[string]interface{}),
+		}, nil
+	}
+
+	// Check if user is a tenant user
+	var user models.User
+	if err := db.Where("cognito_id = ?", cognitoID).First(&user).Error; err != nil {
+		return models.UserProfile{}, fmt.Errorf("user not found: %w", err)
+	}
+
+	// Build permissions based on role
+	permissions := []string{"read:own_data"}
+	if user.Role == models.RoleTenantOwner {
+		permissions = append(permissions, "manage:tenant", "read:tenant_data", "write:tenant_data")
+	} else {
+		permissions = append(permissions, "read:tenant_data", "write:own_data")
+	}
+
+	return models.UserProfile{
+		CognitoID:   user.CognitoID,
+		Email:       cognitoID, // For now, use cognito ID as email placeholder
+		Username:    cognitoID, // For now, use cognito ID as username placeholder
+		Role:        string(user.Role),
+		TenantID:    &user.TenantID,
+		IsAdmin:     false,
+		Permissions: permissions,
+		Metadata:    make(map[string]interface{}),
+	}, nil
+}
+
+// handleLogout handles user logout and session revocation
+func handleLogout(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Get access token from context (set by auth middleware)
+		accessToken, exists := c.Get("access_token")
+		if !exists {
+			utils.UnauthorizedResponse(c, "No active session found")
+			return
+		}
+
+		// Revoke session in Redis
+		err := utils.RevokeTokenSession(accessToken.(string))
+		if err != nil {
+			utils.InternalServerErrorResponse(c, "Failed to revoke session")
+			return
+		}
+
+		utils.OKResponse(c, "Logout successful", map[string]interface{}{
+			"message": "Session revoked successfully",
+		})
+	}
+}
+
+// handleGetSessions handles getting user's active sessions
+func handleGetSessions(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Get user info from context (for future use)
+		_, err := middleware.GetUserInfoFromContext(c)
+		if err != nil {
+			utils.UnauthorizedResponse(c, "User info not found")
+			return
+		}
+
+		// For now, return current session info
+		// In a full implementation, you'd scan Redis for all user sessions
+		session, exists := c.Get("session")
+		if !exists {
+			utils.InternalServerErrorResponse(c, "Session not found")
+			return
+		}
+
+		tokenSession := session.(*models.TokenSession)
+
+		response := map[string]interface{}{
+			"active_sessions": []map[string]interface{}{
+				{
+					"session_id":   tokenSession.SessionID,
+					"created_at":   tokenSession.CreatedAt,
+					"last_used_at": tokenSession.LastUsedAt,
+					"expires_at":   tokenSession.ExpiresAt,
+					"is_current":   true,
+				},
+			},
+			"total_sessions": 1,
+		}
+
+		utils.OKResponse(c, "Sessions retrieved", response)
+	}
+}
+
+// handleRevokeSession handles revoking a specific session
+func handleRevokeSession(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		sessionID := c.Param("session_id")
+		if sessionID == "" {
+			utils.BadRequestResponse(c, "Session ID required")
+			return
+		}
+
+		// Get user info from context (for future use)
+		_, err := middleware.GetUserInfoFromContext(c)
+		if err != nil {
+			utils.UnauthorizedResponse(c, "User info not found")
+			return
+		}
+
+		// For now, only allow revoking current session
+		// In a full implementation, you'd validate the session belongs to the user
+		currentSession, exists := c.Get("session")
+		if !exists {
+			utils.InternalServerErrorResponse(c, "Current session not found")
+			return
+		}
+
+		tokenSession := currentSession.(*models.TokenSession)
+		if tokenSession.SessionID != sessionID {
+			utils.ForbiddenResponse(c, "Can only revoke your own sessions")
+			return
+		}
+
+		// Revoke session
+		accessToken, _ := c.Get("access_token")
+		err = utils.RevokeTokenSession(accessToken.(string))
+		if err != nil {
+			utils.InternalServerErrorResponse(c, "Failed to revoke session")
+			return
+		}
+
+		utils.OKResponse(c, "Session revoked successfully", map[string]interface{}{
+			"session_id": sessionID,
+			"message":    "Session has been revoked",
+		})
+	}
 }
 
 // getStringClaim safely extracts a string claim

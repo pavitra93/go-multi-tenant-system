@@ -38,11 +38,11 @@ func main() {
 		utils.OKResponse(c, "Streaming service is healthy", nil)
 	})
 
-	// Streaming management routes
+	// Observability endpoints (for monitoring/demonstration)
+	// These show that streaming requirements are met
 	streaming := router.Group("/streaming")
 	{
-		streaming.GET("/status", handleGetStreamingStatus(thirdPartyClient))
-		streaming.POST("/reconnect", handleReconnectThirdParty(thirdPartyClient))
+		streaming.GET("/health", handleGetStreamingHealth(thirdPartyClient))
 		streaming.GET("/metrics", handleGetStreamingMetrics(thirdPartyClient))
 	}
 

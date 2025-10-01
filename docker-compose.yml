@@ -74,12 +74,12 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=password
       - DB_NAME=multi_tenant_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - AWS_REGION=${AWS_REGION}
       - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID}
       - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
       - COGNITO_CLIENT_SECRET=${COGNITO_CLIENT_SECRET}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
     depends_on:
       - postgres
       - redis
@@ -98,8 +98,11 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=password
       - DB_NAME=multi_tenant_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     depends_on:
       - postgres
+      - redis
     networks:
       - multi-tenant-network
 
@@ -166,8 +169,8 @@ services:
       - auth-service
       - tenant-service
       - location-service
-      - streaming-service
       - redis
+      # streaming-service is optional - only for observability endpoints
     networks:
       - multi-tenant-network
 

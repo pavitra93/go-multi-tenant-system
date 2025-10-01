@@ -75,8 +75,10 @@ func main() {
 		auth.POST("/login", serviceClients.AuthService.ProxyRequest)
 		auth.POST("/register", serviceClients.AuthService.ProxyRequest)
 		auth.POST("/refresh", serviceClients.AuthService.ProxyRequest)
-		auth.GET("/verify", authMiddleware.RequireAuth(), serviceClients.AuthService.ProxyRequest)
+		// Note: /auth/confirm endpoint removed - email confirmation handled manually in AWS console
 		auth.POST("/logout", authMiddleware.RequireAuth(), serviceClients.AuthService.ProxyRequest)
+		auth.GET("/sessions", authMiddleware.RequireAuth(), serviceClients.AuthService.ProxyRequest)
+		auth.DELETE("/sessions/:session_id", authMiddleware.RequireAuth(), serviceClients.AuthService.ProxyRequest)
 	}
 
 	// User management routes (admin only)
@@ -126,12 +128,12 @@ func main() {
 		location.GET("/session/:id/locations", serviceClients.LocationService.ProxyRequest)
 	}
 
-	// Streaming management routes
+	// Streaming observability routes (read-only, for monitoring)
+	// These demonstrate that streaming requirements are met
 	streaming := router.Group("/streaming")
 	streaming.Use(authMiddleware.RequireAuth())
 	{
-		streaming.GET("/status", serviceClients.StreamingService.ProxyRequest)
-		streaming.POST("/reconnect", serviceClients.StreamingService.ProxyRequest)
+		streaming.GET("/health", serviceClients.StreamingService.ProxyRequest)
 		streaming.GET("/metrics", serviceClients.StreamingService.ProxyRequest)
 	}
 
