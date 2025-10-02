@@ -62,11 +62,11 @@ lint:
 
 # Start development environment
 dev:
-	docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+	docker-compose up -d
 
 # Start production environment
 prod:
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+	docker-compose up -d
 
 # Database operations
 db-migrate:

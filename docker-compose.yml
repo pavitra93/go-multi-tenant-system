@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15
@@ -136,7 +134,12 @@ services:
       - "8004:8004"
     environment:
       - KAFKA_BROKER=kafka:29092
-      - THIRD_PARTY_ENDPOINT=${THIRD_PARTY_ENDPOINT}
+      - THIRD_PARTY_ENDPOINT=${THIRD_PARTY_ENDPOINT:-http://invalid-endpoint:9999/fail}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=multi_tenant_db
     depends_on:
       - kafka
     networks:

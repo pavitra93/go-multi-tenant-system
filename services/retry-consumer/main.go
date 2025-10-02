@@ -148,6 +148,27 @@ func (rc *RetryConsumer) ProcessFailedUpdates() {
 
 // retryFailedUpdate retries a single failed location update
 func (rc *RetryConsumer) retryFailedUpdate(failed FailedLocationUpdate) error {
+	// Check if session is still active (if session_id exists)
+	if failed.SessionID != nil {
+		var sessionStatus string
+		err := rc.db.Table("location_sessions").
+			Select("status").
+			Where("id = ?", failed.SessionID).
+			Scan(&sessionStatus).Error
+
+		if err != nil {
+			// Session not found or error - mark as permanently failed
+			log.Printf("Session %s not found or error checking status: %v", failed.SessionID, err)
+			return rc.markPermanentlyFailed(failed, "Session not found or inactive")
+		}
+
+		if sessionStatus != "active" {
+			// Session is not active - mark as permanently failed
+			log.Printf("Session %s is not active (status: %s) - marking as permanently failed", failed.SessionID, sessionStatus)
+			return rc.markPermanentlyFailed(failed, fmt.Sprintf("Session inactive (status: %s)", sessionStatus))
+		}
+	}
+
 	// Create location event from failed update
 	event := LocationEvent{
 		ID:        failed.OriginalEventID,
@@ -246,6 +267,17 @@ func (rc *RetryConsumer) markResolved(failed FailedLocationUpdate) error {
 	failed.Status = "resolved"
 	failed.UpdatedAt = now
 	failed.ResolvedAt = &now
+
+	return rc.db.Save(&failed).Error
+}
+
+// markPermanentlyFailed marks a failed update as permanently failed (no more retries)
+func (rc *RetryConsumer) markPermanentlyFailed(failed FailedLocationUpdate, reason string) error {
+	now := time.Now()
+	failed.Status = "permanently_failed"
+	failed.UpdatedAt = now
+	failed.ResolvedAt = &now
+	failed.ErrorMessage = reason
 
 	return rc.db.Save(&failed).Error
 }

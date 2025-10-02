@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/pavitra93/go-multi-tenant-system/shared/config"
 	"github.com/pavitra93/go-multi-tenant-system/shared/utils"
 	"github.com/sirupsen/logrus"
 )
@@ -16,8 +17,14 @@ func main() {
 		logrus.Warn("No .env file found, using environment variables")
 	}
 
-	// Initialize Kafka consumer
-	kafkaConsumer, err := NewKafkaConsumer(os.Getenv("KAFKA_BROKER"))
+	// Initialize database connection
+	db, err := config.ConnectDatabase()
+	if err != nil {
+		log.Fatal("Failed to initialize database:", err)
+	}
+
+	// Initialize Kafka consumer with database connection
+	kafkaConsumer, err := NewKafkaConsumer(os.Getenv("KAFKA_BROKER"), db)
 	if err != nil {
 		log.Fatal("Failed to initialize Kafka consumer:", err)
 	}

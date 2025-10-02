@@ -7,16 +7,19 @@ import (
 	"log"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
+	"gorm.io/gorm"
 )
 
 // KafkaConsumer handles Kafka message consumption
 type KafkaConsumer struct {
 	locationReader *kafka.Reader
+	db             *gorm.DB
 }
 
 // NewKafkaConsumer creates a new Kafka consumer
-func NewKafkaConsumer(broker string) (*KafkaConsumer, error) {
+func NewKafkaConsumer(broker string, db *gorm.DB) (*KafkaConsumer, error) {
 	// Create reader for location updates
 	locationReader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:        []string{broker},
@@ -29,6 +32,7 @@ func NewKafkaConsumer(broker string) (*KafkaConsumer, error) {
 
 	return &KafkaConsumer{
 		locationReader: locationReader,
+		db:             db,
 	}, nil
 }
 
@@ -89,15 +93,55 @@ type FailedLocationUpdate struct {
 
 // storeFailedUpdate stores failed location update in database for retry
 func (kc *KafkaConsumer) storeFailedUpdate(event LocationEvent, err error) error {
-	// Calculate next retry time (1 minute from now)
 	nextRetryAt := time.Now().Add(1 * time.Minute)
 
-	// Store in database (this would need database connection)
-	// For now, just log the failed update
+	tenantUUID, parseErr := uuid.Parse(event.TenantID)
+	if parseErr != nil {
+		log.Printf("Failed to parse tenant ID: %v", parseErr)
+		return parseErr
+	}
+
+	var sessionUUID *uuid.UUID
+	if event.SessionID != "" {
+		parsed, parseErr := uuid.Parse(event.SessionID)
+		if parseErr == nil {
+			sessionUUID = &parsed
+		}
+	}
+
+	failedUpdate := FailedLocationUpdate{
+		ID:              uuid.New().String(),
+		OriginalEventID: event.ID,
+		TenantID:        tenantUUID.String(),
+		UserID:          event.UserID,
+		SessionID:       sessionUUIDPtr(sessionUUID),
+		Latitude:        &event.Latitude,
+		Longitude:       &event.Longitude,
+		ErrorMessage:    err.Error(),
+		RetryCount:      0,
+		Status:          "pending",
+		NextRetryAt:     &nextRetryAt,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+
+	if dbErr := kc.db.Create(&failedUpdate).Error; dbErr != nil {
+		log.Printf("Failed to store failed update in database: %v", dbErr)
+		return dbErr
+	}
+
 	log.Printf("Failed location update stored for retry - ID: %s, Tenant: %s, User: %s, Error: %s, Next retry: %s",
 		event.ID, event.TenantID, event.UserID, err.Error(), nextRetryAt.Format(time.RFC3339))
 
 	return nil
+}
+
+func sessionUUIDPtr(u *uuid.UUID) *string {
+	if u == nil {
+		return nil
+	}
+	s := u.String()
+	return &s
 }
 
 // Close closes the Kafka consumer
