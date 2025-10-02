@@ -12,29 +12,5 @@ INSERT INTO tenants (id, name, domain, is_active, created_at, updated_at) VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- =====================================================
--- NOTES FOR INTERVIEWER
--- =====================================================
--- 
--- 1. USER MANAGEMENT:
---    - Admin users are created in the 'admins' table
---    - Tenant users are created in the 'users' table with tenant_id
---    - User authentication is handled by AWS Cognito
---    - User data (email, username) is stored in Cognito, not in our database
---
--- 2. LOCATION TRACKING:
---    - Users start a 10-minute location session
---    - Location points are submitted every 30 seconds during the session
---    - Each location point is stored with latitude, longitude, and accuracy
---    - Sessions can be active, completed, or expired
---
--- 3. MULTI-TENANCY:
---    - Row Level Security (RLS) ensures tenant data isolation
---    - Each tenant can only access their own data
---    - Admin users can access all tenant data
---
--- 4. PERFORMANCE:
---    - Strategic indexes optimize the most common queries
---    - Session validation is the most critical performance path
---    - Location inserts happen frequently (every 30 seconds per active user)
---
+-- SAMPLE DATA COMPLETE
 -- =====================================================

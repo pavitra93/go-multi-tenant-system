@@ -89,7 +89,7 @@ func handleStartSession(db *gorm.DB, kafkaProducer *KafkaProducer) gin.HandlerFu
 		if sessionData, err := json.Marshal(session); err == nil {
 			cacheDuration := time.Duration(session.Duration) * time.Second
 			if err := utils.CacheSet(cacheKey, string(sessionData), cacheDuration); err != nil {
-				fmt.Printf("Warning: Failed to cache session in Redis: %v\n", err)
+				// Cache failure is non-critical
 			}
 		}
 
@@ -145,9 +145,7 @@ func handleStopSession(db *gorm.DB, kafkaProducer *KafkaProducer) gin.HandlerFun
 		// Invalidate session cache in Redis
 		cacheKey := fmt.Sprintf("session:active:%s", sessionUUID.String())
 		if redisClient := utils.GetRedisClient(); redisClient != nil {
-			if err := redisClient.Del(utils.GetRedisContext(), cacheKey).Err(); err != nil {
-				fmt.Printf("Warning: Failed to invalidate session cache: %v\n", err)
-			}
+			redisClient.Del(utils.GetRedisContext(), cacheKey)
 		}
 
 		// Send session event to Kafka (async with worker pool)
@@ -313,8 +311,7 @@ func handleLocationUpdate(db *gorm.DB, kafkaProducer *KafkaProducer) gin.Handler
 		}
 
 		if err := kafkaProducer.SendLocationEvent(locationEvent); err != nil {
-			// Log warning if queue is full (event is queued asynchronously)
-			fmt.Printf("Warning: Failed to queue location event: %v\n", err)
+			// Queue full - event dropped
 		}
 
 		utils.OKResponse(c, "Location updated successfully", location)

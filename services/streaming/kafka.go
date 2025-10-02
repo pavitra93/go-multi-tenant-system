@@ -65,9 +65,6 @@ func (kc *KafkaConsumer) ConsumeLocationUpdates(thirdPartyClient *ThirdPartyClie
 			if dlqErr := kc.storeFailedUpdate(locationEvent, err); dlqErr != nil {
 				log.Printf("Failed to store failed update: %v", dlqErr)
 			}
-		} else {
-			log.Printf("Successfully sent location update for tenant %s, user %s",
-				locationEvent.TenantID, locationEvent.UserID)
 		}
 	}
 }

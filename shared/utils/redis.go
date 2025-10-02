@@ -50,7 +50,6 @@ func InitRedis() error {
 		return fmt.Errorf("failed to connect to Redis at %s: %w", addr, err)
 	}
 
-	fmt.Printf("✅ Connected to Redis at %s\n", addr)
 	return nil
 }
 

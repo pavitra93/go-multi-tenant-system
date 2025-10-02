@@ -49,7 +49,6 @@ func (kp *KafkaProducer) startWorkers() {
 		go kp.locationEventWorker(i)
 	}
 
-	fmt.Printf("[Kafka] Started %d location workers\n", kp.workerCount)
 }
 
 // locationEventWorker processes location events from the channel
@@ -60,10 +59,9 @@ func (kp *KafkaProducer) locationEventWorker(id int) {
 		select {
 		case event := <-kp.locationEventChan:
 			if err := kp.sendLocationEventSync(event); err != nil {
-				fmt.Printf("[Kafka Worker %d] Failed to send location event: %v\n", id, err)
+				// Log error silently
 			}
 		case <-kp.shutdownChan:
-			fmt.Printf("[Kafka Worker %d] Shutting down location worker\n", id)
 			return
 		}
 	}
