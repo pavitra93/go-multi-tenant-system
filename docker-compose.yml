@@ -142,6 +142,25 @@ services:
     networks:
       - multi-tenant-network
 
+  retry-consumer:
+    build:
+      context: .
+      dockerfile: services/retry-consumer/Dockerfile
+    ports:
+      - "8085:8085"
+    environment:
+      - RETRY_CONSUMER_PORT=8085
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=multi_tenant_db
+      - THIRD_PARTY_ENDPOINT=${THIRD_PARTY_ENDPOINT}
+    depends_on:
+      - postgres
+    networks:
+      - multi-tenant-network
+
   api-gateway:
     build:
       context: .
@@ -153,6 +172,7 @@ services:
       - TENANT_SERVICE_URL=http://tenant-service:8002
       - LOCATION_SERVICE_URL=http://location-service:8003
       - STREAMING_SERVICE_URL=http://streaming-service:8004
+      - RETRY_CONSUMER_SERVICE_URL=http://retry-consumer:8085
       - AWS_REGION=${AWS_REGION}
       - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID}
       - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}

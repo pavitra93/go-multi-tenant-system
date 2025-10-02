@@ -41,10 +41,11 @@ func main() {
 
 	// Initialize service clients
 	serviceClients := &ServiceClients{
-		AuthService:      NewServiceClient(os.Getenv("AUTH_SERVICE_URL")),
-		TenantService:    NewServiceClient(os.Getenv("TENANT_SERVICE_URL")),
-		LocationService:  NewServiceClient(os.Getenv("LOCATION_SERVICE_URL")),
-		StreamingService: NewServiceClient(os.Getenv("STREAMING_SERVICE_URL")),
+		AuthService:          NewServiceClient(os.Getenv("AUTH_SERVICE_URL")),
+		TenantService:        NewServiceClient(os.Getenv("TENANT_SERVICE_URL")),
+		LocationService:      NewServiceClient(os.Getenv("LOCATION_SERVICE_URL")),
+		StreamingService:     NewServiceClient(os.Getenv("STREAMING_SERVICE_URL")),
+		RetryConsumerService: NewServiceClient(os.Getenv("RETRY_CONSUMER_SERVICE_URL")),
 	}
 
 	// Initialize Gin router
@@ -125,7 +126,13 @@ func main() {
 	streaming.Use(authMiddleware.RequireAuth())
 	{
 		streaming.GET("/health", serviceClients.StreamingService.ProxyRequest)
-		streaming.GET("/metrics", serviceClients.StreamingService.ProxyRequest)
+	}
+
+	// Retry management routes (admin only)
+	retry := router.Group("/retry")
+	retry.Use(authMiddleware.RequireAuth(), authMiddleware.RequireRole("admin"))
+	{
+		retry.GET("/stats", serviceClients.RetryConsumerService.ProxyRequest)
 	}
 
 	// Start server

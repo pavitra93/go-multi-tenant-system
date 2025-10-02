@@ -39,18 +39,6 @@ type LocationEvent struct {
 	EventType     string    `json:"event_type"`
 }
 
-// SessionEvent represents a session event for Kafka
-type SessionEvent struct {
-	ID            uuid.UUID  `json:"id"`
-	TenantID      uuid.UUID  `json:"tenant_id"`
-	CognitoUserID string     `json:"cognito_cognito_user_id"`
-	Status        string     `json:"status"`
-	StartedAt     time.Time  `json:"started_at"`
-	EndedAt       *time.Time `json:"ended_at,omitempty"`
-	Duration      int        `json:"duration"`
-	EventType     string     `json:"event_type"`
-}
-
 // handleStartSession handles starting a new location tracking session
 func handleStartSession(db *gorm.DB, kafkaProducer *KafkaProducer) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -106,20 +94,6 @@ func handleStartSession(db *gorm.DB, kafkaProducer *KafkaProducer) gin.HandlerFu
 		}
 
 		// Send session event to Kafka (async with worker pool)
-		sessionEvent := SessionEvent{
-			ID:            session.ID,
-			TenantID:      tenantUUID,
-			CognitoUserID: userID,
-			Status:        string(session.Status),
-			StartedAt:     session.StartedAt,
-			Duration:      session.Duration,
-			EventType:     "session_started",
-		}
-
-		if err := kafkaProducer.SendSessionEvent(sessionEvent); err != nil {
-			// Log error but don't fail the request (event is queued asynchronously)
-			fmt.Printf("Warning: Failed to queue session event: %v\n", err)
-		}
 
 		utils.CreatedResponse(c, "Session started successfully", session)
 	}
@@ -177,21 +151,6 @@ func handleStopSession(db *gorm.DB, kafkaProducer *KafkaProducer) gin.HandlerFun
 		}
 
 		// Send session event to Kafka (async with worker pool)
-		sessionEvent := SessionEvent{
-			ID:            session.ID,
-			TenantID:      tenantUUID,
-			CognitoUserID: userID,
-			Status:        string(session.Status),
-			StartedAt:     session.StartedAt,
-			EndedAt:       session.EndedAt,
-			Duration:      session.Duration,
-			EventType:     "session_ended",
-		}
-
-		if err := kafkaProducer.SendSessionEvent(sessionEvent); err != nil {
-			// Log error but don't fail the request (event is queued asynchronously)
-			fmt.Printf("Warning: Failed to queue session event: %v\n", err)
-		}
 
 		utils.OKResponse(c, "Session stopped successfully", session)
 	}

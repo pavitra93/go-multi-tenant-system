@@ -38,31 +38,3 @@ func handleGetStreamingHealth(client *ThirdPartyClient) gin.HandlerFunc {
 		}
 	}
 }
-
-// handleGetStreamingMetrics shows streaming performance metrics
-// Demonstrates failure handling and retry statistics
-func handleGetStreamingMetrics(client *ThirdPartyClient) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		status := client.GetStatus()
-		metrics := status["metrics"]
-
-		response := map[string]interface{}{
-			"streaming_metrics": metrics,
-			"kafka_topics": []string{
-				"location-updates",
-				"session-events",
-			},
-			"retry_policy": map[string]interface{}{
-				"max_retries":        3,
-				"backoff_strategy":   "exponential",
-				"base_delay_seconds": 1,
-			},
-			"protocols": []string{
-				"Kafka (message broker)",
-				"HTTP (third-party streaming)",
-			},
-		}
-
-		utils.OKResponse(c, "Streaming metrics retrieved", response)
-	}
-}

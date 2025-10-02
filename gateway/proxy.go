@@ -19,10 +19,11 @@ type ServiceClient struct {
 
 // ServiceClients holds all service clients
 type ServiceClients struct {
-	AuthService      *ServiceClient
-	TenantService    *ServiceClient
-	LocationService  *ServiceClient
-	StreamingService *ServiceClient
+	AuthService          *ServiceClient
+	TenantService        *ServiceClient
+	LocationService      *ServiceClient
+	StreamingService     *ServiceClient
+	RetryConsumerService *ServiceClient
 }
 
 // NewServiceClient creates a new service client

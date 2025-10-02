@@ -26,9 +26,8 @@ func main() {
 	// Initialize third-party client
 	thirdPartyClient := NewThirdPartyClient(os.Getenv("THIRD_PARTY_ENDPOINT"))
 
-	// Start Kafka consumers
+	// Start Kafka consumer for location updates only
 	go kafkaConsumer.ConsumeLocationUpdates(thirdPartyClient)
-	go kafkaConsumer.ConsumeSessionEvents(thirdPartyClient)
 
 	// Initialize Gin router
 	router := gin.Default()
@@ -43,7 +42,6 @@ func main() {
 	streaming := router.Group("/streaming")
 	{
 		streaming.GET("/health", handleGetStreamingHealth(thirdPartyClient))
-		streaming.GET("/metrics", handleGetStreamingMetrics(thirdPartyClient))
 	}
 
 	// Start server
