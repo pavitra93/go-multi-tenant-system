@@ -54,7 +54,6 @@ func main() {
 		// Admin-only routes (platform management)
 		tenants.POST("/", authMiddleware.RequireRole("admin"), handleCreateTenant(db))
 		tenants.GET("/", authMiddleware.RequireRole("admin"), handleGetTenants(db))
-		tenants.DELETE("/:id", authMiddleware.RequireRole("admin"), handleDeleteTenant(db))
 
 		// Tenant-specific routes
 		tenants.GET("/:id", authMiddleware.RequireTenantAccess(), handleGetTenant(db))
@@ -63,8 +62,6 @@ func main() {
 		// Tenant user management (tenant owner can manage their users)
 		tenants.GET("/:id/users", authMiddleware.RequireTenantOwnerOrAdmin(), handleGetTenantUsers(db))
 		tenants.POST("/:id/users", authMiddleware.RequireTenantOwnerOrAdmin(), handleInviteUserToTenant(db))
-		tenants.PUT("/:id/users/:user_id", authMiddleware.RequireTenantOwnerOrAdmin(), handleUpdateTenantUser(db))
-		tenants.DELETE("/:id/users/:user_id", authMiddleware.RequireTenantOwnerOrAdmin(), handleRemoveTenantUser(db))
 	}
 
 	// Start server

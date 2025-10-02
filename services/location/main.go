@@ -61,7 +61,6 @@ func main() {
 		// Session management
 		location.POST("/session/start", handleStartSession(db, kafkaProducer))
 		location.POST("/session/:id/stop", handleStopSession(db, kafkaProducer))
-		location.GET("/session/:id", handleGetSession(db))
 		location.GET("/sessions", handleGetUserSessions(db))
 
 		// Location data submission

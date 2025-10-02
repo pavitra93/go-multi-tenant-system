@@ -154,39 +154,6 @@ func handleStopSession(db *gorm.DB, kafkaProducer *KafkaProducer) gin.HandlerFun
 	}
 }
 
-// handleGetSession handles getting a specific session
-func handleGetSession(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		userID, _, tenantID, _ := middleware.GetUserFromContext(c)
-		sessionID := c.Param("id")
-
-		// Parse tenant UUID
-		tenantUUID, err := uuid.Parse(tenantID)
-		if err != nil {
-			utils.BadRequestResponse(c, "Invalid tenant ID")
-			return
-		}
-
-		sessionUUID, err := uuid.Parse(sessionID)
-		if err != nil {
-			utils.BadRequestResponse(c, "Invalid session ID")
-			return
-		}
-
-		var session models.LocationSession
-		if err := db.Where("id = ? AND cognito_user_id = ? AND tenant_id = ?", sessionUUID, userID, tenantUUID).First(&session).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				utils.NotFoundResponse(c, "Session not found")
-			} else {
-				utils.InternalServerErrorResponse(c, "Failed to fetch session")
-			}
-			return
-		}
-
-		utils.OKResponse(c, "Session retrieved successfully", session)
-	}
-}
-
 // handleGetUserSessions handles getting all sessions for a user
 func handleGetUserSessions(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {

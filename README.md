@@ -50,12 +50,36 @@ A scalable multi-tenant microservices architecture built with Go, featuring real
 
 ## API Endpoints
 
+## Demo API Endpoints
+
+### Demo Flow by Role
+
+**Admin Demo:**
+1. `POST /auth/login` - Login as admin
+2. `GET /tenants` - View all tenants
+3. `POST /tenants` - Create new tenant
+4. `GET /retry/stats` - Monitor system health
+
+**Tenant Owner Demo:**
+1. `POST /auth/login` - Login as tenant owner
+2. `GET /tenants/{id}` - View tenant details
+3. `PUT /tenants/{id}` - Update tenant info
+4. `GET /tenants/{id}/users` - View tenant users
+5. `POST /tenants/{id}/users` - Add user to tenant
+
+**User Demo:**
+1. `POST /auth/login` - Login as tenant user
+2. `POST /location/session/start` - Start location tracking
+3. `POST /location/update` - Submit location data (multiple times)
+4. `POST /location/session/{id}/stop` - Stop tracking
+5. `GET /location/sessions` - View tracking sessions
+6. `GET /location/session/{id}/locations` - View location history
+
 ### Authentication
 - `POST /auth/login` - User login (creates Redis session)
 - `POST /auth/register` - User registration
+- `POST /auth/refresh` - Refresh access token
 - `POST /auth/logout` - User logout (revokes Redis session)
-- `GET /auth/sessions` - Get user sessions
-- `DELETE /auth/sessions/{id}` - Revoke specific session
 
 ### Tenant Management
 - `GET /tenants` - List tenants (admin only)
@@ -64,18 +88,16 @@ A scalable multi-tenant microservices architecture built with Go, featuring real
 - `PUT /tenants/{id}` - Update tenant
 - `GET /tenants/{id}/users` - Get tenant users
 - `POST /tenants/{id}/users` - Add user to tenant
-- `PUT /tenants/{id}/users/{user_id}` - Update tenant user
-- `DELETE /tenants/{id}/users/{user_id}` - Remove user from tenant
 
 ### Location Tracking
 - `POST /location/session/start` - Start location tracking session
 - `POST /location/update` - Submit location data (streams to Kafka)
-- `GET /location/session/{id}` - Get session data
 - `POST /location/session/{id}/stop` - Stop tracking session
 - `GET /location/sessions` - Get user's location sessions
 - `GET /location/session/{id}/locations` - Get location history for session
 
-### Streaming & Monitoring
+### Health & Monitoring
+- `GET /health` - API Gateway health check
 - `GET /streaming/health` - Streaming service health check
 - `GET /retry/stats` - Retry statistics (admin only)
 

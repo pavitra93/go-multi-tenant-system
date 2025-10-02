@@ -134,44 +134,6 @@ func handleUpdateTenant(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// handleDeleteTenant handles deleting a tenant (admin only)
-func handleDeleteTenant(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		tenantID := c.Param("id")
-
-		// Check if tenant exists
-		var tenant models.Tenant
-		if err := db.Where("id = ?", tenantID).First(&tenant).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				utils.NotFoundResponse(c, "Tenant not found")
-			} else {
-				utils.InternalServerErrorResponse(c, "Failed to fetch tenant")
-			}
-			return
-		}
-
-		// Check if tenant has users
-		var userCount int64
-		if err := db.Model(&models.User{}).Where("tenant_id = ?", tenantID).Count(&userCount).Error; err != nil {
-			utils.InternalServerErrorResponse(c, "Failed to check tenant users")
-			return
-		}
-
-		if userCount > 0 {
-			utils.BadRequestResponse(c, "Cannot delete tenant with existing users")
-			return
-		}
-
-		// Delete tenant
-		if err := db.Delete(&tenant).Error; err != nil {
-			utils.InternalServerErrorResponse(c, "Failed to delete tenant")
-			return
-		}
-
-		utils.OKResponse(c, "Tenant deleted successfully", nil)
-	}
-}
-
 // handleInviteUserToTenant handles inviting a new user to the tenant
 // Tenant owners can use this to add users to their tenant
 func handleInviteUserToTenant(db *gorm.DB) gin.HandlerFunc {
@@ -196,57 +158,6 @@ func handleInviteUserToTenant(db *gorm.DB) gin.HandlerFunc {
 			"role":      req.Role,
 			"message":   "User will receive registration email",
 		})
-	}
-}
-
-// handleUpdateTenantUser handles updating a user's role within the tenant
-func handleUpdateTenantUser(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		tenantID := c.Param("id")
-		userID := c.Param("user_id")
-
-		var req struct {
-			Role string `json:"role" binding:"required,oneof=user tenant_owner"`
-		}
-
-		if err := c.ShouldBindJSON(&req); err != nil {
-			utils.BadRequestResponse(c, "Invalid request format")
-			return
-		}
-
-		utils.OKResponse(c, "User role updated", map[string]interface{}{
-			"tenant_id": tenantID,
-			"user_id":   userID,
-			"new_role":  req.Role,
-		})
-	}
-}
-
-// handleRemoveTenantUser handles removing a user from the tenant
-func handleRemoveTenantUser(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		tenantID := c.Param("id")
-		userID := c.Param("user_id")
-
-		// Verify user belongs to this tenant
-		var user models.User
-		tenantUUID, _ := uuid.Parse(tenantID)
-		if err := db.Where("cognito_id = ? AND tenant_id = ?", userID, tenantUUID).First(&user).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				utils.NotFoundResponse(c, "User not found in this tenant")
-			} else {
-				utils.InternalServerErrorResponse(c, "Failed to find user")
-			}
-			return
-		}
-
-		// Delete user (would also need to delete from Cognito in real implementation)
-		if err := db.Delete(&user).Error; err != nil {
-			utils.InternalServerErrorResponse(c, "Failed to remove user")
-			return
-		}
-
-		utils.OKResponse(c, "User removed from tenant", nil)
 	}
 }
 

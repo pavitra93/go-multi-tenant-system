@@ -77,18 +77,6 @@ func main() {
 		auth.POST("/register", serviceClients.AuthService.ProxyRequest)
 		auth.POST("/refresh", serviceClients.AuthService.ProxyRequest)
 		auth.POST("/logout", authMiddleware.RequireAuth(), serviceClients.AuthService.ProxyRequest)
-		auth.GET("/sessions", authMiddleware.RequireAuth(), serviceClients.AuthService.ProxyRequest)
-		auth.DELETE("/sessions/:session_id", authMiddleware.RequireAuth(), serviceClients.AuthService.ProxyRequest)
-	}
-
-	// User management routes (admin only)
-	users := router.Group("/users")
-	users.Use(authMiddleware.RequireAuth(), authMiddleware.RequireRole("admin"))
-	{
-		users.GET("/", serviceClients.AuthService.ProxyRequest)
-		users.GET("/:id", serviceClients.AuthService.ProxyRequest)
-		users.PUT("/:id", serviceClients.AuthService.ProxyRequest)
-		users.DELETE("/:id", serviceClients.AuthService.ProxyRequest)
 	}
 
 	// Tenant management routes
@@ -97,15 +85,11 @@ func main() {
 	{
 		tenants.POST("/", authMiddleware.RequireRole("admin"), serviceClients.TenantService.ProxyRequest)
 		tenants.GET("/", authMiddleware.RequireRole("admin"), serviceClients.TenantService.ProxyRequest)
-		tenants.DELETE("/:id", authMiddleware.RequireRole("admin"), serviceClients.TenantService.ProxyRequest)
 
 		tenants.GET("/:id", authMiddleware.RequireTenantAccess(), serviceClients.TenantService.ProxyRequest)
 		tenants.PUT("/:id", authMiddleware.RequireTenantOwnerOrAdmin(), serviceClients.TenantService.ProxyRequest)
 		tenants.GET("/:id/users", authMiddleware.RequireTenantOwnerOrAdmin(), serviceClients.TenantService.ProxyRequest)
-
 		tenants.POST("/:id/users", authMiddleware.RequireTenantOwnerOrAdmin(), serviceClients.TenantService.ProxyRequest)
-		tenants.PUT("/:id/users/:user_id", authMiddleware.RequireTenantOwnerOrAdmin(), serviceClients.TenantService.ProxyRequest)
-		tenants.DELETE("/:id/users/:user_id", authMiddleware.RequireTenantOwnerOrAdmin(), serviceClients.TenantService.ProxyRequest)
 	}
 
 	// Location tracking routes
@@ -114,7 +98,6 @@ func main() {
 	{
 		location.POST("/session/start", serviceClients.LocationService.ProxyRequest)
 		location.POST("/session/:id/stop", serviceClients.LocationService.ProxyRequest)
-		location.GET("/session/:id", serviceClients.LocationService.ProxyRequest)
 		location.GET("/sessions", serviceClients.LocationService.ProxyRequest)
 
 		location.POST("/update", serviceClients.LocationService.ProxyRequest)
