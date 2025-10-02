@@ -75,7 +75,6 @@ func main() {
 		auth.POST("/login", serviceClients.AuthService.ProxyRequest)
 		auth.POST("/register", serviceClients.AuthService.ProxyRequest)
 		auth.POST("/refresh", serviceClients.AuthService.ProxyRequest)
-		// Note: /auth/confirm endpoint removed - email confirmation handled manually in AWS console
 		auth.POST("/logout", authMiddleware.RequireAuth(), serviceClients.AuthService.ProxyRequest)
 		auth.GET("/sessions", authMiddleware.RequireAuth(), serviceClients.AuthService.ProxyRequest)
 		auth.DELETE("/sessions/:session_id", authMiddleware.RequireAuth(), serviceClients.AuthService.ProxyRequest)
@@ -95,19 +94,14 @@ func main() {
 	tenants := router.Group("/tenants")
 	tenants.Use(authMiddleware.RequireAuth())
 	{
-		// Admin-only routes (platform management)
 		tenants.POST("/", authMiddleware.RequireRole("admin"), serviceClients.TenantService.ProxyRequest)
 		tenants.GET("/", authMiddleware.RequireRole("admin"), serviceClients.TenantService.ProxyRequest)
 		tenants.DELETE("/:id", authMiddleware.RequireRole("admin"), serviceClients.TenantService.ProxyRequest)
 
-		// Tenant-specific routes (tenant owner can manage their own tenant)
 		tenants.GET("/:id", authMiddleware.RequireTenantAccess(), serviceClients.TenantService.ProxyRequest)
 		tenants.PUT("/:id", authMiddleware.RequireTenantOwnerOrAdmin(), serviceClients.TenantService.ProxyRequest)
 		tenants.GET("/:id/users", authMiddleware.RequireTenantOwnerOrAdmin(), serviceClients.TenantService.ProxyRequest)
-		tenants.GET("/:id/settings", authMiddleware.RequireTenantAccess(), serviceClients.TenantService.ProxyRequest)
-		tenants.PUT("/:id/settings", authMiddleware.RequireTenantOwnerOrAdmin(), serviceClients.TenantService.ProxyRequest)
 
-		// User management within tenant (tenant owner can invite/manage users)
 		tenants.POST("/:id/users", authMiddleware.RequireTenantOwnerOrAdmin(), serviceClients.TenantService.ProxyRequest)
 		tenants.PUT("/:id/users/:user_id", authMiddleware.RequireTenantOwnerOrAdmin(), serviceClients.TenantService.ProxyRequest)
 		tenants.DELETE("/:id/users/:user_id", authMiddleware.RequireTenantOwnerOrAdmin(), serviceClients.TenantService.ProxyRequest)
@@ -117,19 +111,16 @@ func main() {
 	location := router.Group("/location")
 	location.Use(authMiddleware.RequireAuth())
 	{
-		// Session management
 		location.POST("/session/start", serviceClients.LocationService.ProxyRequest)
 		location.POST("/session/:id/stop", serviceClients.LocationService.ProxyRequest)
 		location.GET("/session/:id", serviceClients.LocationService.ProxyRequest)
 		location.GET("/sessions", serviceClients.LocationService.ProxyRequest)
 
-		// Location data submission
 		location.POST("/update", serviceClients.LocationService.ProxyRequest)
 		location.GET("/session/:id/locations", serviceClients.LocationService.ProxyRequest)
 	}
 
-	// Streaming observability routes (read-only, for monitoring)
-	// These demonstrate that streaming requirements are met
+	// Streaming observability routes
 	streaming := router.Group("/streaming")
 	streaming.Use(authMiddleware.RequireAuth())
 	{

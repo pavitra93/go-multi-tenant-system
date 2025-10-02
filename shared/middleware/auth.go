@@ -42,15 +42,12 @@ func (am *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 		}
 
 		// Look up session in Redis
-		fmt.Printf("Looking up session for token: %s...\n", accessToken[:20])
 		session, err := utils.GetTokenSession(accessToken)
 		if err != nil {
-			fmt.Printf("Session lookup failed: %v\n", err)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
 			c.Abort()
 			return
 		}
-		fmt.Printf("Session found: %+v\n", session.UserProfile)
 
 		// Update last used timestamp (non-blocking)
 		go func() {
@@ -59,7 +56,6 @@ func (am *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 
 		// Set user context from session
 		c.Set("user_id", session.UserProfile.CognitoID)
-		c.Set("username", session.UserProfile.Username)
 		c.Set("email", session.UserProfile.Email)
 		c.Set("role", session.UserProfile.Role)
 		c.Set("is_admin", session.UserProfile.IsAdmin)
@@ -71,9 +67,7 @@ func (am *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 			c.Set("tenant_id", session.UserProfile.TenantID.String())
 		}
 
-		// Set tenant context in database for Row-Level Security
-		// This activates RLS policies to enforce tenant isolation
-		// Only set tenant context for non-admin users
+		// Set tenant context for RLS (non-admin users only)
 		if !session.UserProfile.IsAdmin && session.UserProfile.TenantID != nil {
 			am.db.Exec("SELECT set_tenant_context(?)", *session.UserProfile.TenantID)
 			am.db.Exec("SELECT set_user_role(?)", session.UserProfile.Role)
@@ -113,15 +107,12 @@ func (am *AuthMiddleware) RequireTenantOwnerOrAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, _ := c.Get("role")
 
-		// Platform admin can access everything
 		if role == "admin" {
 			c.Next()
 			return
 		}
 
-		// Tenant owner can only access their own tenant
 		if role == "tenant_owner" {
-			// Check if accessing their own tenant
 			requestedTenantID := c.Param("id")
 			userTenantID := c.GetString("tenant_id")
 
@@ -146,18 +137,15 @@ func (am *AuthMiddleware) RequireTenantOwnerOrAdmin() gin.HandlerFunc {
 	}
 }
 
-// RequireTenantAccess middleware validates tenant access
-// Allows: admin (all tenants), tenant_owner (own tenant), user (own tenant - read only)
+// RequireTenantAccess validates tenant access
 func (am *AuthMiddleware) RequireTenantAccess() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Check if user is admin (can access any tenant)
 		role, _ := c.Get("role")
 		if role == "admin" {
 			c.Next()
 			return
 		}
 
-		// For non-admin users, check tenant access
 		userTenantID, exists := c.Get("tenant_id")
 		if !exists {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Tenant information not found"})
@@ -165,7 +153,6 @@ func (am *AuthMiddleware) RequireTenantAccess() gin.HandlerFunc {
 			return
 		}
 
-		// Check if they're accessing their own tenant
 		requestedTenantID := c.Param("id")
 		if requestedTenantID == "" {
 			requestedTenantID = c.Param("tenant_id")
@@ -188,7 +175,6 @@ func extractToken(c *gin.Context) string {
 		return ""
 	}
 
-	// Check for "Bearer " prefix
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		return strings.TrimPrefix(authHeader, "Bearer ")
 	}
@@ -196,24 +182,21 @@ func extractToken(c *gin.Context) string {
 	return authHeader
 }
 
-// GetUserFromContext extracts user information from the Gin context
-// Returns data that was extracted from JWT claims
+// GetUserFromContext extracts user information from context
 func GetUserFromContext(c *gin.Context) (cognitoID, email, tenantID, role string) {
-	cognitoID = c.GetString("user_id") // This is actually cognito_id (sub from JWT)
+	cognitoID = c.GetString("user_id")
 	email = c.GetString("email")
 	tenantID = c.GetString("tenant_id")
 	role = c.GetString("role")
 	return
 }
 
-// GetUserInfoFromContext extracts full user information from the Gin context as UserInfo struct
+// GetUserInfoFromContext extracts user information from context
 func GetUserInfoFromContext(c *gin.Context) (*models.UserInfo, error) {
-	// Try to get session first (preferred method)
 	if sessionInterface, exists := c.Get("session"); exists {
 		if session, ok := sessionInterface.(*models.TokenSession); ok {
 			return &models.UserInfo{
 				CognitoID: session.UserProfile.CognitoID,
-				Username:  session.UserProfile.Username,
 				Email:     session.UserProfile.Email,
 				Role:      models.UserRole(session.UserProfile.Role),
 				TenantID:  session.UserProfile.TenantID,
@@ -221,8 +204,6 @@ func GetUserInfoFromContext(c *gin.Context) (*models.UserInfo, error) {
 			}, nil
 		}
 	}
-
-	// Fallback to individual context values (for backward compatibility)
 	cognitoID := c.GetString("user_id")
 	if cognitoID == "" {
 		return nil, fmt.Errorf("user_id not found in context")
@@ -242,14 +223,8 @@ func GetUserInfoFromContext(c *gin.Context) (*models.UserInfo, error) {
 		tenantID = &parsedTenantID
 	}
 
-	username := c.GetString("username")
-	if username == "" {
-		username = email // Fallback to email if username not set
-	}
-
 	return &models.UserInfo{
 		CognitoID: cognitoID,
-		Username:  username,
 		Email:     email,
 		Role:      models.UserRole(role),
 		TenantID:  tenantID,
@@ -257,8 +232,7 @@ func GetUserInfoFromContext(c *gin.Context) (*models.UserInfo, error) {
 	}, nil
 }
 
-// GetTenantIDFromContext extracts tenant ID from the Gin context
-// Returns error for admin users who don't have a tenant_id
+// GetTenantIDFromContext extracts tenant ID from context
 func GetTenantIDFromContext(c *gin.Context) (uuid.UUID, error) {
 	tenantIDStr, exists := c.Get("tenant_id")
 	if !exists || tenantIDStr == "" {

@@ -109,7 +109,6 @@ func handleLogin(db *gorm.DB) gin.HandlerFunc {
 			AuthParameters: authParams,
 		}
 
-		// Use circuit breaker for Cognito call
 		var authResult *cognitoidentityprovider.InitiateAuthOutput
 		err := circuitBreaker.Call(func() error {
 			var cognitoErr error
@@ -121,62 +120,48 @@ func handleLogin(db *gorm.DB) gin.HandlerFunc {
 			if err == utils.ErrCircuitOpen {
 				utils.ServiceUnavailableResponse(c, "Authentication service temporarily unavailable")
 			} else {
-				fmt.Printf("Cognito login error: %v\n", err)
 				utils.UnauthorizedResponse(c, "Invalid credentials")
 			}
 			return
 		}
 
-		// Get access token and ID token
 		accessToken := *authResult.AuthenticationResult.AccessToken
 		idToken := *authResult.AuthenticationResult.IdToken
 
-		// Extract Cognito ID from ID token
 		cognitoID, err := extractCognitoIDFromToken(idToken)
 		if err != nil {
 			utils.InternalServerErrorResponse(c, "Failed to extract user ID from token")
 			return
 		}
 
-		// Build user profile from database lookup using Cognito ID
-		fmt.Printf("Looking up user with Cognito ID: %s\n", cognitoID)
-		userProfile, err := buildUserProfileFromDB(db, cognitoID)
+		userProfile, err := buildUserProfileFromDB(db, cognitoID, req.Username)
 		if err != nil {
-			fmt.Printf("Failed to build user profile: %v\n", err)
 			utils.InternalServerErrorResponse(c, "Failed to build user profile")
 			return
 		}
-		fmt.Printf("User profile built successfully: %+v\n", userProfile)
 
-		// Create Redis session
 		sessionTTL := time.Duration(*authResult.AuthenticationResult.ExpiresIn) * time.Second
 		session, err := utils.CreateTokenSession(accessToken, userProfile, sessionTTL)
 		if err != nil {
-			fmt.Printf("Failed to create Redis session: %v\n", err)
 			utils.InternalServerErrorResponse(c, "Failed to create session")
 			return
 		}
 
-		// Update last_login_at asynchronously (non-blocking)
 		go func() {
 			now := time.Now()
 			if userProfile.IsAdmin {
-				// Update admin last login
 				db.Model(&models.Admin{}).Where("cognito_id = ?", userProfile.CognitoID).Update("last_login_at", now)
 			} else {
-				// Update user last login
 				db.Model(&models.User{}).Where("cognito_id = ?", userProfile.CognitoID).Update("last_login_at", now)
 			}
 		}()
 
-		// Prepare response with access token only
 		response := map[string]interface{}{
 			"access_token": accessToken,
 			"expires_in":   *authResult.AuthenticationResult.ExpiresIn,
 			"token_type":   "Bearer",
 			"user_info":    userProfile,
 			"session_id":   session.SessionID,
-			"_note":        "Use access_token for API calls - user info is cached in Redis",
 		}
 
 		utils.OKResponse(c, "Login successful", response)
@@ -227,7 +212,6 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Step 1: Start database transaction
 		tx := db.Begin()
 		defer func() {
 			if r := recover(); r != nil {
@@ -235,19 +219,12 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 			}
 		}()
 
-		// Step 2: Create minimal user in database (will update with Cognito ID later)
-		// Note: CognitoID is required, so we'll set it after Cognito signup succeeds
 		user := models.User{
-			CognitoID: "",             // Will be set after Cognito signup
-			TenantID:  parsedTenantID, // Tenant ID for tenant users
-			Role:      userRole,       // Role within tenant
+			CognitoID: "",
+			TenantID:  parsedTenantID,
+			Role:      userRole,
 			CreatedAt: time.Now(),
 		}
-
-		// Don't create user in DB yet - wait for Cognito success first
-		// This ensures we don't have orphaned DB records
-
-		// Step 3: Register user with Cognito with custom attributes
 		userAttributes := []*cognitoidentityprovider.AttributeType{
 			{
 				Name:  aws.String("custom:role"),
@@ -255,11 +232,10 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 			},
 			{
 				Name:  aws.String("email"),
-				Value: aws.String(req.Username), // Using username as email
+				Value: aws.String(req.Username),
 			},
 		}
 
-		// Add tenant_id for tenant users
 		userAttributes = append(userAttributes, &cognitoidentityprovider.AttributeType{
 			Name:  aws.String("custom:tenant_id"),
 			Value: aws.String(parsedTenantID.String()),
@@ -272,12 +248,10 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 			UserAttributes: userAttributes,
 		}
 
-		// Add secret hash if client secret is configured
 		if secretHash := generateSecretHash(req.Username); secretHash != "" {
 			signUpInput.SecretHash = aws.String(secretHash)
 		}
 
-		// Use circuit breaker for Cognito call
 		var signUpResult *cognitoidentityprovider.SignUpOutput
 		cognitoErr := circuitBreaker.Call(func() error {
 			var err error
@@ -286,9 +260,7 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 		})
 
 		if cognitoErr != nil {
-			// Rollback database changes if Cognito fails
 			tx.Rollback()
-
 			if cognitoErr == utils.ErrCircuitOpen {
 				utils.ServiceUnavailableResponse(c, "Authentication service temporarily unavailable")
 			} else {
@@ -297,10 +269,8 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Step 4: Create user in database with Cognito ID (primary key)
 		user.CognitoID = *signUpResult.UserSub
 		if err := tx.Create(&user).Error; err != nil {
-			// Compensate: Delete from Cognito if database creation fails
 			compensateErr := circuitBreaker.Call(func() error {
 				_, deleteErr := cognitoClient.AdminDeleteUser(&cognitoidentityprovider.AdminDeleteUserInput{
 					UserPoolId: aws.String(os.Getenv("COGNITO_USER_POOL_ID")),
@@ -310,7 +280,6 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 			})
 
 			if compensateErr != nil {
-				// Log compensation failure for monitoring
 				logrus.WithFields(logrus.Fields{
 					"username": req.Username,
 					"error":    compensateErr,
@@ -322,12 +291,7 @@ func handleRegister(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Step 5: User registration complete
-		// Note: User needs to be confirmed via /auth/confirm endpoint before they can login
-
-		// Step 6: Commit transaction
 		if err := tx.Commit().Error; err != nil {
-			// Last resort compensation
 			_ = circuitBreaker.Call(func() error {
 				_, deleteErr := cognitoClient.AdminDeleteUser(&cognitoidentityprovider.AdminDeleteUserInput{
 					UserPoolId: aws.String(os.Getenv("COGNITO_USER_POOL_ID")),
@@ -621,7 +585,6 @@ func extractUserInfoFromToken(tokenString string) (*models.UserInfo, error) {
 	// Extract user information
 	userInfo := &models.UserInfo{
 		CognitoID: getStringClaim(claims, "sub"),
-		Username:  getStringClaim(claims, "cognito:username"),
 		Email:     getStringClaim(claims, "email"),
 		Role:      models.UserRole(getStringClaim(claims, "custom:role")),
 	}
@@ -660,20 +623,18 @@ func extractCognitoIDFromToken(tokenString string) (string, error) {
 }
 
 // buildUserProfileFromDB builds a UserProfile from database lookup
-func buildUserProfileFromDB(db *gorm.DB, cognitoID string) (models.UserProfile, error) {
+func buildUserProfileFromDB(db *gorm.DB, cognitoID, email string) (models.UserProfile, error) {
 	// First check if user is an admin
 	var admin models.Admin
 	if err := db.Where("cognito_id = ?", cognitoID).First(&admin).Error; err == nil {
 		// User is an admin
 		return models.UserProfile{
-			CognitoID:   admin.CognitoID,
-			Email:       cognitoID, // For now, use cognito ID as email placeholder
-			Username:    cognitoID, // For now, use cognito ID as username placeholder
-			Role:        "admin",
-			TenantID:    nil,
-			IsAdmin:     true,
-			Permissions: []string{"*"}, // Admin has all permissions
-			Metadata:    make(map[string]interface{}),
+			CognitoID: admin.CognitoID,
+			Email:     email, // Use actual email from login request
+			Role:      "admin",
+			TenantID:  nil,
+			IsAdmin:   true,
+			Metadata:  make(map[string]interface{}),
 		}, nil
 	}
 
@@ -683,23 +644,13 @@ func buildUserProfileFromDB(db *gorm.DB, cognitoID string) (models.UserProfile, 
 		return models.UserProfile{}, fmt.Errorf("user not found: %w", err)
 	}
 
-	// Build permissions based on role
-	permissions := []string{"read:own_data"}
-	if user.Role == models.RoleTenantOwner {
-		permissions = append(permissions, "manage:tenant", "read:tenant_data", "write:tenant_data")
-	} else {
-		permissions = append(permissions, "read:tenant_data", "write:own_data")
-	}
-
 	return models.UserProfile{
-		CognitoID:   user.CognitoID,
-		Email:       cognitoID, // For now, use cognito ID as email placeholder
-		Username:    cognitoID, // For now, use cognito ID as username placeholder
-		Role:        string(user.Role),
-		TenantID:    &user.TenantID,
-		IsAdmin:     false,
-		Permissions: permissions,
-		Metadata:    make(map[string]interface{}),
+		CognitoID: user.CognitoID,
+		Email:     email, // Use actual email from login request
+		Role:      string(user.Role),
+		TenantID:  &user.TenantID,
+		IsAdmin:   false,
+		Metadata:  make(map[string]interface{}),
 	}, nil
 }
 

@@ -38,7 +38,7 @@ func (c *DatabaseConfig) GetDSN() string {
 		c.Host, c.Port, c.User, c.Password, c.DBName, c.SSLMode)
 }
 
-// ConnectDatabase establishes a connection to the database with optimized pool settings
+// ConnectDatabase establishes a connection to the database with optimized pool configuration
 func ConnectDatabase() (*gorm.DB, error) {
 	config := GetDatabaseConfig()
 
@@ -56,7 +56,7 @@ func ConnectDatabase() (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to get underlying SQL DB: %w", err)
 	}
 
-	// Connection pool settings (per service)
+	// Connection pool configuration (per service)
 	// With 4 services × 25 = 100 max connections (PostgreSQL default limit)
 	sqlDB.SetMaxOpenConns(25)                  // Maximum open connections per service
 	sqlDB.SetMaxIdleConns(10)                  // Keep 10 idle connections for fast reuse
