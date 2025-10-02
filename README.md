@@ -105,6 +105,8 @@ A scalable multi-tenant microservices architecture built with Go, featuring real
 - **Priority Processing**: Latest location updates retried first
 - **Max Retries**: 8 attempts before permanent failure
 - **Status Tracking**: pending → retried → resolved/permanently_failed
+- **Session Validation**: Only retries updates for active sessions
+- **Smart Filtering**: Inactive sessions marked as permanently failed
 
 ## Complete Flow: Tenant User Location Tracking with DLQ
 
@@ -120,7 +122,7 @@ Start Session → Location Updates → Kafka → Streaming Service → Third-Par
 
 ### 3. Failure Handling Flow
 ```
-Third-Party Fails → Database DLQ → Retry Consumer → Exponential Backoff → Success/Failure
+Third-Party Fails → Database DLQ → Retry Consumer → Session Validation → Exponential Backoff → Success/Failure
 ```
 
 ### 4. Detailed Flow Chart
@@ -140,12 +142,19 @@ Failure → 1m → 2m → 4m → 8m → 16m → 32m → 64m → 128m → Permane
 ```
 pending → retried → resolved
 pending → retried → permanently_failed
+pending → permanently_failed (inactive session)
 ```
 
 #### Priority Processing
 - Latest location updates are retried first (`ORDER BY created_at DESC`)
 - Ensures most current location data reaches third-party systems
 - Critical for real-time location tracking use cases
+
+#### Session Validation
+- **Active Session Check**: Validates session status before retry
+- **Smart Filtering**: Inactive sessions (ended/expired/cancelled) marked as permanently failed
+- **Resource Optimization**: Prevents unnecessary retries for inactive sessions
+- **Status Tracking**: Clear distinction between retry failures and session inactivity
 
 ### 6. Database Schema
 
@@ -189,7 +198,7 @@ CREATE TABLE failed_location_updates (
 ## Development
 
 ### Prerequisites
-- Go 1.21+
+- Go 1.23+
 - Docker and Docker Compose
 - AWS Cognito User Pool
 - PostgreSQL database
